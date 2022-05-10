@@ -1,6 +1,7 @@
 import copy
 import numpy as np
 
+
 def bbox_resize(bbox, in_imsize, out_imsize):
     # resizing the bounding box adjust to the mother image
     # in_imsize -> out_imsize
@@ -46,6 +47,7 @@ def bbox_resize(bbox, in_imsize, out_imsize):
 
     return bboxes
 
+
 def xywhToxyxy(bbox):
     """
     Change coordinates of bounding box
@@ -67,6 +69,7 @@ def xywhToxyxy(bbox):
         bboxes[:, 3] = bboxes[:, 1] + bboxes[:, 3]
 
     return bboxes
+
 
 def xyxyToxywh(bbox):
     """
@@ -97,7 +100,7 @@ def iou(bbox1, bbox2, eps=1e-8):
 
     :param bbox1: pytorch tensor of bounding box
     :param bbox2: pytorch tensor of bounding box
-    :param gamma: zero division protector
+    :param eps: zero division protector
     :return: iou score
     """
 

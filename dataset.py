@@ -1,39 +1,38 @@
-import torch
-import torchvision
-import numpy as np
-
-import cv2
-
 import os
 
-from pycocotools.coco import COCO
+import cv2
+import numpy as np
+import torch
+import torchvision
 from PIL import Image
+from pycocotools.coco import COCO
 
+from roi_extraction import selective_search_extraction
 from utils import bbox_resize
-from roiExtraction import selectiveSearchExtraction
-from roiExtraction import trainRoiExtract
 
 """
 Main coordinates of bbox is x,y,w,h
 """
 
-class COCOdb(torch.utils.data.Dataset):
-    def __init__(self, dataDir='/data/coco', dataType='train2017', dataSize='full', input_size=(512, 512), cat_type='full', train=True, ss_roi=True):
-        super(COCOdb, self).__init__()
-        # ss_roi : do selective search region proposal for fast rcnn
+
+class COCODataset(torch.utils.data.Dataset):
+    def __init__(self, data_dir='/data/coco', data_type='train', data_size='full',
+                 input_size=(512, 512), cat_type='full', train=True, ss_roi=True):
+        super().__init__()
 
         assert len(input_size) == 2, "Dimension of input size should be 2."
-        assert dataSize=='full' or type(dataSize)==int
+        assert data_size == 'full' or type(data_size) == int
 
         self.input_size = input_size
         self.ss_roi = ss_roi
 
-        self.dataPath = os.path.join(dataDir, dataType)
+        self.data_path = os.path.join(data_dir, "images", data_type)
 
-        self.cocoTool, self.imgIds = self._init_cocotools(dataDir, dataType, dataSize, train)
+        self.cocotool, self.imgIds = self._init_cocotools(data_dir, data_type, data_size, train)
 
-        self.category = self.cocoTool.cats
-        self.numbered_category = [0] + list(self.category.keys())
+        self.category = self.cocotool.cats
+        self.numbered_category = [0] + list(self.category.keys())  # 缺少 12, 26, 29, 30, 45, 66, 68, 69, 71, 83
+        # print(self.numbered_category)
 
         self._rescale_bboxes(input_size)
 
@@ -52,29 +51,29 @@ class COCOdb(torch.utils.data.Dataset):
         anns : corresponding annotations (bbox, class)
         extarcted_regions : region porposals by selective search, if self.ss_roi == False then return None
         """
-        imgId = self.imgIds[index]
-        annIds = self.cocoTool.getAnnIds(imgId)
+        img_id = self.imgIds[index]
+        ann_ids = self.cocotool.getAnnIds(img_id)
 
-        filename = self.cocoTool.imgs[imgId]['file_name']
-        path = os.path.join(self.dataPath, filename)
+        filename = self.cocotool.imgs[img_id]['file_name']
+        path = os.path.join(self.data_path, filename)
         # Image
         img = Image.open(path)
         img = self.transform(img.convert('RGB'))
         # Annotations
-        anns = torch.zeros((len(annIds),5), dtype=torch.float)
+        anns = torch.zeros((len(ann_ids), 5), dtype=torch.float)
         # [[x, y, w, h, category]
         #           ...
         #  [x, y, w, h, category]]
-        for idx,annId in enumerate(annIds):
-            ann = self.cocoTool.anns[annId]
-            anns[idx,:4] = torch.tensor(ann['bbox'])
-            anns[idx,4] = torch.tensor(ann['category_id'])
+        for idx, annId in enumerate(ann_ids):
+            ann = self.cocotool.anns[annId]
+            anns[idx, :4] = torch.tensor(ann['bbox'])
+            anns[idx, 4] = torch.tensor(ann['category_id'])
         # Extracted regions
         extracted_regions = None
         if self.ss_roi:
             cv_img = cv2.imread(path)
             cv_img = cv2.resize(cv_img, dsize=(self.input_size))
-            extracted_regions = selectiveSearchExtraction(cv_img, search_type='fast')
+            extracted_regions = selective_search_extraction(cv_img, search_type='fast')
             extracted_regions = torch.from_numpy(extracted_regions).float()
 
         return img, anns, extracted_regions
@@ -85,36 +84,32 @@ class COCOdb(torch.utils.data.Dataset):
     def _rescale_bboxes(self, input_size):
         # rescaling bounding boxes to corresponding input shape
         for imgId in self.imgIds:
-            annIds = self.cocoTool.getAnnIds(imgId)
+            ann_ids = self.cocotool.getAnnIds(imgId)
 
-            img_width = self.cocoTool.imgs[imgId]['width']
-            img_height = self.cocoTool.imgs[imgId]['height']
+            img_width = self.cocotool.imgs[imgId]['width']
+            img_height = self.cocotool.imgs[imgId]['height']
 
             img_size = (img_width, img_height)
 
-            for annId in annIds:
-                self.cocoTool.anns[annId]['bbox'] = \
-                    bbox_resize(self.cocoTool.anns[annId]['bbox'], img_size, input_size)
+            for annId in ann_ids:
+                self.cocotool.anns[annId]['bbox'] = bbox_resize(self.cocotool.anns[annId]['bbox'], img_size, input_size)
 
-    def _init_cocotools(self, dataDir, dataType, dataSize, train):
-        dataDir = dataDir
-        dataType = dataType
-        dataSize = dataSize
+    def _init_cocotools(self, data_dir, data_type, data_size, train):
 
-        annType = ['segm', 'bbox', 'keypoints']
-        annType = annType[1]  # specify type here
-        prefix = 'person_keypoints' if annType == 'keypoints' else 'instances'
-        annFile = '%s/annotations/%s_%s.json' % (dataDir, prefix, dataType)
+        ann_types = ['segm', 'bbox', 'keypoints']
+        ann_type = ann_types[1]  # specify type here
+        prefix = 'person_keypoints' if ann_type == 'keypoints' else 'instances'
+        ann_file = f'{data_dir}/annotations/{prefix}_{data_type}2017.json'  # 标注文件
 
-        cocoTool = COCO(annFile)
+        cocotool = COCO(ann_file)
 
-        imgIds = sorted(cocoTool.getImgIds())
-        if not dataSize == 'full':
-            imgIds = imgIds[0:dataSize]
+        img_ids = sorted(cocotool.getImgIds())
+        if not data_size == 'full':
+            img_ids = img_ids[0:data_size]
         if not train:
-            imgIds = imgIds[-dataSize:]
+            img_ids = img_ids[-data_size:]
 
-        return cocoTool, imgIds
+        return cocotool, img_ids
 
     def _target_normalize_coef(self, eps=1e-8):
 
@@ -123,9 +118,9 @@ class COCOdb(torch.utils.data.Dataset):
         squared_sums = np.zeros((len(self.category) + 1, 4))
 
         for imgId in self.imgIds:
-            annIds = self.cocoTool.getAnnIds(imgId)
-            for annId in annIds:
-                ann = self.cocoTool.anns[annId]
+            ann_ids = self.cocotool.getAnnIds(imgId)
+            for ann_id in ann_ids:
+                ann = self.cocotool.anns[ann_id]
                 category = ann['category_id']
                 bbox = ann['bbox']
                 cls_counts[self.numbered_category.index(category)] += 1
@@ -137,14 +132,16 @@ class COCOdb(torch.utils.data.Dataset):
 
         return means, stds
 
+
 def coco_collate(batch):
     imgs = torch.stack([item[0] for item in batch], 0)
     anns = torch.stack([item[1] for item in batch], 0)
     regions = torch.stack([item[2] for item in batch], 0)
     return imgs, anns, regions
 
+
 if __name__ == '__main__':
-    cocodb = COCOdb()
+    cocodb = COCODataset(data_dir="D:/dataset/COCO2017")
 
     coco_loader = torch.utils.data.DataLoader(cocodb)
 
@@ -155,10 +152,3 @@ if __name__ == '__main__':
     print("cocodb target means shape : ", cocodb.target_means.shape)
     print("cocodb target stds shape : ", cocodb.target_stds.shape)
     print("region proposals shape : ", reg.shape)
-
-    roi, roi_label = trainRoiExtract(reg, a_anns, num_roi=10)
-
-    print("roi")
-    print(roi)
-    print("roi_label")
-    print(roi_label)
